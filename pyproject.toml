@@ -1,0 +1,32 @@
+[project]
+name = "viam-smart-assistant"
+version = "0.1.0"
+description = "A demonstration of building a basic smart assistant using Viam modular resources"
+authors = [
+    {name = "HipsterBrown", email = "headhipster@hipsterbrown.com"},
+]
+dependencies = [
+    "viam-sdk>=0.13.3",
+    "chat-service-api @ git+https://github.com/viam-labs/chat-service-api.git@main",
+    "speech-service-api @ git+https://github.com/viam-labs/speech-service-api.git@main",
+]
+requires-python = ">=3.8.2,<3.13"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm.scripts]
+start = "python -m src.viam_smart_assistant"
+
+[tool.pdm.resolution.overrides]
+viam-sdk = "0.13.3"
+grpclib = "0.4.7"
+
+[tool.pyprojectx]
+main = ["pdm"]
+
+[tool.pdm]
+distribution = true
