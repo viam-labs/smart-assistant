@@ -1,114 +1,59 @@
 import asyncio
+from typing import Optional, Sequence
 
-from collections.abc import Mapping, Sequence
-from typing import ClassVar, cast, Optional
-from typing_extensions import Self
-from viam.components.generic import Generic
-from viam.module.module import Model, Reconfigurable, ResourceBase, ResourceName
-from viam.resource.types import ModelFamily
-from viam.proto.app.robot import ComponentConfig
-from viam.services.service_base import ValueTypes
-from viam.utils import struct_to_dict
+from viam.module.module import RobotClient
 from viam.logging import getLogger
 
 from chat_service_api import Chat
 from speech_service_api import SpeechService
 
+from .config import AssistantConfig
+
 LOGGER = getLogger(__name__)
 
-class Assistant(Generic, Reconfigurable):
-    MODEL: ClassVar[Model] = Model(ModelFamily("viam-labs", "generic"), "assistant")
-
+class Assistant:
+    robot_client = RobotClient
     chat: Chat
     speech: SpeechService
-    started: asyncio.Task | None = None
+    config: AssistantConfig
 
-    def __init__(self, name: str):
-        super().__init__(name)
-
-    @classmethod
-    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
-        assistant = cls(config.name)
-        LOGGER.info(f"Log config: {config.log_configuration}")
-        LOGGER.info(f"Depends on: {config.depends_on}")
-        LOGGER.info(f"Service configs: {config.service_configs}")
-        assistant.reconfigure(config, dependencies)
-        return assistant
-
-    @classmethod
-    def validate_config(cls, config: ComponentConfig) -> Sequence[str]:
-        attrs = struct_to_dict(config.attributes)
-        chat_name = attrs.get("chat_service", "")
-        assert isinstance(chat_name, str)
-        if (chat_name == ""):
-            raise Exception("The chat_service name is required for the Assistant component")
-
-        speech_name = attrs.get("speech_service", "")
-        assert isinstance(speech_name, str)
-        if (speech_name == ""):
-            raise Exception("The speech_service name is required for the Assistant component")
-
-        return [chat_name, speech_name]
-
-    def reconfigure(self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]):
-        attrs = struct_to_dict(config.attributes)
-        chat_name = attrs.get("chat_service")
-        speech_name = attrs.get("speech_service")
-
-        assert isinstance(chat_name, str) and isinstance(speech_name, str)
-
-        chat = dependencies[Chat.get_resource_name(chat_name)]
-        speech = dependencies[SpeechService.get_resource_name(speech_name)]
-
-        self.chat = cast(Chat, chat)
-        self.speech = cast(SpeechService, speech)
-
-        LOGGER.info(f"Found chat service {chat_name}: {self.chat}")
-        LOGGER.info(f"Found speech service {speech_name}: {self.speech}")
-
-        if hasattr(self, "started") and self.started is not None:
-            self.started.cancel()
-
-        self.started = asyncio.create_task(self.start())
-
-    async def do_command(self, command: Mapping[str, ValueTypes], *, timeout: Optional[float] = None, **kwargs) -> Mapping[str, ValueTypes]:
-        for command_name, args in command.items():
-            if command_name == "intro":
-                return {
-                        "intro": await self.intro()
-                        }
-            if command_name == "restart":
-                return {
-                        "restart": await self.restart()
-                        }
-            else:
-                LOGGER.warning(f"Unknown command: {command_name}")
-                return {}
-        return {}
+    def __init__(self, config: AssistantConfig):
+        self.config = config
 
     async def close(self):
-        if self.started is not None:
-            self.started.cancel()
-            await self.started
+        if self.robot_client:
+            await self.robot_client.close()
 
     async def start(self):
         LOGGER.info("Started assistant!")
 
-        await self.speech.say("Hello from your Viam smart assistant! How can I help you today?", blocking=True)
+        self.robot_client = await self.connect()
+        self.chat = Chat.from_robot(self.robot_client, self.config.chat_name)
+        self.speech = SpeechService.from_robot(self.robot_client, self.config.speech_name)
 
-    async def restart(self):
-        if self.started is not None:
-            self.started.cancel()
-            await self.started
+        await self.speech.listen_trigger(type="command")
+        await self.speech.say("Hello from your Viam smart assistant! How can I help you today?", blocking=False)
 
-        self.started = asyncio.create_task(self.start())
+        LOGGER.info("Waiting for command.")
+        command = await self.handle_commands()
+        await self.speech.say(f"I've received the command: {command}. Working on that now.", blocking=False)
+        response = await self.chat.chat(message=command)
+        await self.speech.say(f"Thanks for waiting! {response}", blocking=True)
 
-        return "Restart complete"
+        await self.close()
 
-    async def intro(self):
-        LOGGER.info("Introducing the assistant")
+    async def connect(self):
+        opt = RobotClient.Options.with_api_key(api_key=self.config.api_key, api_key_id=self.config.api_key_id)
+        return await RobotClient.at_address(self.config.address, opt)
 
-        response = await self.chat.chat("What is the best way to wake up in the morning?")
-        LOGGER.info(f"Chat response: {response}")
+    async def handle_commands(self):
+        commands: Optional[Sequence[str]] = None
+        while commands == None:
+            commands = await self.speech.get_commands(1)
+            if len(commands) > 0:
+                LOGGER.debug(f"Commands: {commands}")
+            else:
+                commands = None
+                await asyncio.sleep(1)
 
-        return response
+        return commands[0]
