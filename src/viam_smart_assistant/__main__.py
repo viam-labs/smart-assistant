@@ -1,13 +1,16 @@
 import asyncio
 
-from viam.module.module import Module
-from viam.components.generic import Generic
+# from viam.module.module import Module
+# from viam.components.generic import Generic
 
 from . import Assistant
+from . import AssistantConfig
 
 async def main():
-    module = Module.from_args()
-    module.add_model_from_registry(Generic.SUBTYPE, Assistant.MODEL)
-    await module.start()
+    assistant = Assistant(config=AssistantConfig())
+    try:
+        await assistant.start()
+    except:
+        await assistant.close()
 
 asyncio.run(main())
